@@ -204,24 +204,41 @@ def query_dataset(
             "command": " ".join(cmd)
         }
 
-    # Find the output file(s)
+    # Try to find the report file which contains info about generated files
+    report_dir = output_dir / ".cryo" / "reports"
+    if report_dir.exists():
+        # Get the most recent report file (should be the one we just created)
+        report_files = sorted(report_dir.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if report_files:
+            with open(report_files[0], 'r') as f:
+                report_data = json.load(f)
+                # Get the list of completed files from the report
+                if "results" in report_data and "completed_paths" in report_data["results"]:
+                    completed_files = report_data["results"]["completed_paths"]
+                    print(f"Found {len(completed_files)} files in Cryo report: {completed_files}")
+                    
+                    # Return the list of files and their count
+                    return {
+                        "files": completed_files,
+                        "count": len(completed_files),
+                        "format": output_format
+                    }
+    
+    # Fallback to glob search if report file not found or doesn't contain the expected data
     output_files = list(output_dir.glob(f"*{dataset}*.{output_format}"))
-    print(f"Output files found: {output_files}")
+    print(f"Output files found via glob: {output_files}")
 
     if not output_files:
         return {"error": "No output files generated", "command": " ".join(cmd)}
 
-    # Read and return the data
-    if output_format == "json":
-        with open(output_files[0], 'r') as f:
-            data = json.load(f)
-            return {
-                "data": data,
-                "count": len(data) if isinstance(data, list) else 1,
-            }
-    else:
-        # For other formats, just return the file path
-        return {"file_path": str(output_files[0])}
+    # Convert Path objects to strings for JSON serialization
+    file_paths = [str(file_path) for file_path in output_files]
+    
+    return {
+        "files": file_paths,
+        "count": len(file_paths),
+        "format": output_format
+    }
 
 @mcp.resource("dataset://{name}")
 def get_dataset_info(name: str) -> Dict[str, Any]:
@@ -368,15 +385,29 @@ def lookup_dataset(
         )
         
         if sample_result.returncode == 0:
-            # Find the output file
+            # Try to find the report file which contains info about generated files
+            report_dir = sample_dir / ".cryo" / "reports"
+            if report_dir.exists():
+                # Get the most recent report file
+                report_files = sorted(report_dir.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
+                if report_files:
+                    with open(report_files[0], 'r') as f:
+                        report_data = json.load(f)
+                        # Get the list of completed files from the report
+                        if "results" in report_data and "completed_paths" in report_data["results"]:
+                            completed_files = report_data["results"]["completed_paths"]
+                            print(f"Found {len(completed_files)} files in Cryo report: {completed_files}")
+                            info["sample_files"] = completed_files
+                            return info
+            
+            # Fallback to glob search if report file not found
             output_files = list(sample_dir.glob(f"*{name}*.json"))
-            print(f"Output files found: {output_files}")
+            print(f"Output files found via glob: {output_files}")
             
             if output_files:
-                with open(output_files[0], 'r') as f:
-                    data = json.load(f)
-                    # Only include a few records as a sample
-                    info["sample_data"] = data[:5] if isinstance(data, list) else data
+                # Convert Path objects to strings for JSON serialization
+                file_paths = [str(file_path) for file_path in output_files]
+                info["sample_files"] = file_paths
             else:
                 info["sample_error"] = "No output files generated"
         else:
@@ -529,7 +560,26 @@ def get_latest_ethereum_block() -> Dict[str, Any]:
             "stderr": result.stderr
         }
     
-    # Find the output file
+    # Try to find the report file which contains info about generated files
+    report_dir = latest_dir / ".cryo" / "reports"
+    if report_dir.exists():
+        # Get the most recent report file
+        report_files = sorted(report_dir.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
+        if report_files:
+            with open(report_files[0], 'r') as f:
+                report_data = json.load(f)
+                # Get the list of completed files from the report
+                if "results" in report_data and "completed_paths" in report_data["results"]:
+                    completed_files = report_data["results"]["completed_paths"]
+                    print(f"Found {len(completed_files)} files in Cryo report: {completed_files}")
+                    
+                    return {
+                        "block_number": latest_block,
+                        "files": completed_files,
+                        "count": len(completed_files)
+                    }
+    
+    # Fallback to glob search if report file not found
     output_files = list(latest_dir.glob("*blocks*.json"))
     
     if not output_files:
@@ -538,24 +588,14 @@ def get_latest_ethereum_block() -> Dict[str, Any]:
             "error": "No output files generated"
         }
     
-    # Read the block data
-    with open(output_files[0], 'r') as f:
-        data = json.load(f)
-        if data and len(data) > 0:
-            block_data = data[0]
-            return {
-                "block_number": latest_block,
-                "timestamp": block_data.get("timestamp"),
-                "hash": block_data.get("block_hash"),
-                "author": block_data.get("author"),
-                "gas_used": block_data.get("gas_used"),
-                "base_fee_per_gas": block_data.get("base_fee_per_gas")
-            }
-        else:
-            return {
-                "block_number": latest_block,
-                "error": "Empty block data"
-            }
+    # Convert Path objects to strings for JSON serialization
+    file_paths = [str(file_path) for file_path in output_files]
+    
+    return {
+        "block_number": latest_block,
+        "files": file_paths,
+        "count": len(file_paths)
+    }
 
 def parse_args(args=None):
     """Parse command line arguments"""
