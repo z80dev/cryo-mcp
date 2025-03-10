@@ -12,7 +12,7 @@ import requests
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from mcp.server.fastmcp import FastMCP
 
 # Get the default RPC URL from environment or use fallback
@@ -91,7 +91,15 @@ def query_dataset(
     exclude_columns: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
-    Query a cryo dataset and return the results
+    Download blockchain data and return the file paths where the data is stored.
+    
+    IMPORTANT WORKFLOW NOTE: When running SQL queries, use this function first to download
+    data, then use the returned file paths with query_sql() to execute SQL on those files.
+    
+    Example workflow for SQL:
+    1. First download data: result = query_dataset('transactions', blocks='1000:1010', output_format='parquet')
+    2. Get file paths: files = result.get('files', [])
+    3. Run SQL query: query_sql("SELECT * FROM read_parquet('/path/to/file.parquet')", files=files)
 
     Args:
         dataset: The name of the dataset to query (e.g., 'logs', 'transactions')
@@ -101,12 +109,12 @@ def query_dataset(
         use_latest: If True, query the latest block
         blocks_from_latest: Number of blocks before the latest to include (e.g., 10 = latest-10 to latest)
         contract: Contract address to filter by
-        output_format: Output format (json, csv, parquet)
+        output_format: Output format (json, csv, parquet) - use 'parquet' for SQL queries
         include_columns: Columns to include alongside the defaults
         exclude_columns: Columns to exclude from the defaults
 
     Returns:
-        The dataset results
+        Dictionary containing file paths where the downloaded data is stored
     """
     # Ensure we have the RPC URL
     rpc_url = os.environ.get("ETH_RPC_URL", DEFAULT_RPC_URL)
@@ -595,6 +603,272 @@ def get_latest_ethereum_block() -> Dict[str, Any]:
         "block_number": latest_block,
         "files": file_paths,
         "count": len(file_paths)
+    }
+
+@mcp.tool()
+def query_sql(
+    query: str,
+    files: Optional[List[str]] = None,
+    include_schema: bool = True
+) -> Dict[str, Any]:
+    """
+    Run a SQL query against downloaded blockchain data files
+    
+    IMPORTANT WORKFLOW: This function should be used after calling query_dataset
+    to download data. Use the file paths returned by query_dataset as input to this function.
+    
+    Workflow steps:
+    1. Download data: result = query_dataset('transactions', blocks='1000:1010', output_format='parquet')
+    2. Get file paths: files = result.get('files', [])
+    3. Execute SQL using either:
+       - Direct table references: query_sql("SELECT * FROM transactions", files=files)
+       - Or read_parquet(): query_sql("SELECT * FROM read_parquet('/path/to/file.parquet')", files=files)
+    
+    To see the schema of a file, use get_sql_table_schema(file_path) before writing your query.
+    
+    DuckDB supports both approaches:
+    1. Direct table references (simpler): "SELECT * FROM blocks"
+    2. read_parquet function (explicit): "SELECT * FROM read_parquet('/path/to/file.parquet')"
+    
+    Args:
+        query: SQL query to execute - can use simple table names or read_parquet()
+        files: List of parquet file paths to query (typically from query_dataset results)
+        include_schema: Whether to include schema information in the result
+        
+    Returns:
+        Query results and metadata
+    """
+    from cryo_mcp.sql import execute_sql_query
+    return execute_sql_query(query, files, include_schema)
+
+@mcp.tool()
+def list_available_sql_tables() -> List[Dict[str, Any]]:
+    """
+    List all available parquet files that can be queried with SQL
+    
+    USAGE NOTES:
+    - This function lists parquet files that have already been downloaded
+    - Each file can be queried using read_parquet('/path/to/file.parquet') in your SQL
+    - For each file, this returns the file path, dataset type, and other metadata
+    - Use these file paths in your SQL queries with query_sql()
+    
+    Returns:
+        List of available files and their metadata
+    """
+    from cryo_mcp.sql import list_available_tables
+    return list_available_tables()
+
+@mcp.tool()
+def get_sql_table_schema(file_path: str) -> Dict[str, Any]:
+    """
+    Get the schema and sample data for a specific parquet file
+    
+    WORKFLOW NOTE: Use this function to explore the structure of parquet files
+    before writing SQL queries against them. This will show you:
+    1. All available columns and their data types
+    2. Sample data from the file
+    3. Total row count
+    
+    Usage example:
+    1. Get list of files: files = list_available_sql_tables()
+    2. For a specific file: schema = get_sql_table_schema(files[0]['path'])
+    3. Use columns in your SQL: query_sql("SELECT column1, column2 FROM read_parquet('/path/to/file.parquet')")
+    
+    Args:
+        file_path: Path to the parquet file (from list_available_sql_tables or query_dataset)
+        
+    Returns:
+        Table schema information including columns, data types, and sample data
+    """
+    from cryo_mcp.sql import get_table_schema
+    return get_table_schema(file_path)
+
+@mcp.tool()
+def query_blockchain_sql(
+    sql_query: str,
+    dataset: Optional[str] = None,
+    blocks: Optional[str] = None,
+    start_block: Optional[int] = None,
+    end_block: Optional[int] = None,
+    use_latest: bool = False,
+    blocks_from_latest: Optional[int] = None,
+    contract: Optional[str] = None,
+    force_refresh: bool = False,
+    include_schema: bool = True
+) -> Dict[str, Any]:
+    """
+    Download blockchain data and run SQL query in a single step
+    
+    CONVENIENCE FUNCTION: This combines query_dataset and query_sql into one call.
+    
+    You can write SQL queries using either approach:
+    1. Simple table references: "SELECT * FROM blocks LIMIT 10"
+    2. Explicit read_parquet: "SELECT * FROM read_parquet('/path/to/file.parquet') LIMIT 10"
+    
+    Examples:
+    ```
+    # Using simple table name
+    query_blockchain_sql(
+        sql_query="SELECT * FROM blocks LIMIT 10",
+        dataset="blocks",
+        blocks_from_latest=100
+    )
+    
+    # Using read_parquet() (the path will be automatically replaced)
+    query_blockchain_sql(
+        sql_query="SELECT * FROM read_parquet('/any/path.parquet') LIMIT 10",
+        dataset="blocks",
+        blocks_from_latest=100
+    )
+    ```
+    
+    ALTERNATIVE WORKFLOW (more control):
+    If you need more control, you can separate the steps:
+    1. Download data: result = query_dataset('blocks', blocks_from_latest=100, output_format='parquet')
+    2. Inspect schema: schema = get_sql_table_schema(result['files'][0])
+    3. Run SQL query: query_sql("SELECT * FROM blocks", files=result['files'])
+    
+    Args:
+        sql_query: SQL query to execute - using table names or read_parquet()
+        dataset: The specific dataset to query (e.g., 'transactions', 'logs')
+                 If None, will be extracted from the SQL query
+        blocks: Block range specification as a string (e.g., '1000:1010')
+        start_block: Start block number (alternative to blocks)
+        end_block: End block number (alternative to blocks)
+        use_latest: If True, query the latest block
+        blocks_from_latest: Number of blocks before the latest to include
+        contract: Contract address to filter by
+        force_refresh: Force download of new data even if it exists
+        include_schema: Include schema information in the result
+        
+    Returns:
+        SQL query results and metadata
+    """
+    from cryo_mcp.sql import execute_sql_query, extract_dataset_from_sql
+    
+    # Try to determine dataset if not provided
+    if dataset is None:
+        dataset = extract_dataset_from_sql(sql_query)
+        if dataset is None:
+            return {
+                "success": False,
+                "error": "Could not determine dataset from SQL query. Please specify dataset parameter."
+            }
+    
+    # First, ensure we have the data by running a query_dataset operation
+    # This will download the data and return the file paths
+    download_result = query_dataset(
+        dataset=dataset,
+        blocks=blocks,
+        start_block=start_block,
+        end_block=end_block,
+        use_latest=use_latest,
+        blocks_from_latest=blocks_from_latest,
+        contract=contract,
+        output_format="parquet"  # Use parquet for optimal SQL performance
+    )
+    
+    if "error" in download_result:
+        return {
+            "success": False,
+            "error": f"Failed to download data: {download_result['error']}",
+            "download_details": download_result
+        }
+    
+    # Get the file paths from the download result
+    files = download_result.get("files", [])
+    
+    # Check if we have any files
+    if not files:
+        return {
+            "success": False,
+            "error": "No data files were generated from the download operation"
+        }
+    
+    # Filter for parquet files only
+    parquet_files = [f for f in files if f.endswith('.parquet')]
+    if not parquet_files:
+        return {
+            "success": False,
+            "error": "No parquet files were generated. Check output_format parameter."
+        }
+    
+    # Now execute the SQL query directly against the downloaded parquet files
+    sql_result = execute_sql_query(sql_query, parquet_files, include_schema)
+    
+    # Include download info in result
+    sql_result["data_source"] = {
+        "dataset": dataset,
+        "files": files,
+        "block_range": blocks or f"{start_block}:{end_block}" if start_block and end_block else "latest blocks" 
+                        if use_latest or blocks_from_latest else "default range"
+    }
+    
+    return sql_result
+
+@mcp.tool()
+def get_sql_examples() -> Dict[str, List[str]]:
+    """
+    Get example SQL queries for different blockchain datasets with DuckDB
+    
+    SQL WORKFLOW TIPS:
+    1. First download data: result = query_dataset('dataset_name', blocks='...', output_format='parquet')
+    2. Inspect schema: schema = get_sql_table_schema(result['files'][0])
+    3. Run SQL: query_sql("SELECT * FROM read_parquet('/path/to/file.parquet')", files=result['files'])
+    
+    OR use the combined approach:
+    - query_blockchain_sql(sql_query="SELECT * FROM read_parquet('...')", dataset='blocks', blocks='...')
+    
+    Returns:
+        Dictionary of example queries categorized by dataset type and workflow patterns
+    """
+    return {
+        "basic_usage": [
+            "-- Option 1: Simple table names (recommended)",
+            "SELECT * FROM blocks LIMIT 10",
+            "SELECT * FROM transactions LIMIT 10",
+            "SELECT * FROM logs LIMIT 10",
+            
+            "-- Option 2: Using read_parquet() with explicit file paths",
+            "SELECT * FROM read_parquet('/path/to/blocks.parquet') LIMIT 10"
+        ],
+        "transactions": [
+            "-- Option 1: Simple table reference",
+            "SELECT * FROM transactions LIMIT 10",
+            "SELECT block_number, COUNT(*) as tx_count FROM transactions GROUP BY block_number ORDER BY tx_count DESC LIMIT 10",
+            
+            "-- Option 2: Using read_parquet()",
+            "SELECT from_address, COUNT(*) as sent_count FROM read_parquet('/path/to/transactions.parquet') GROUP BY from_address ORDER BY sent_count DESC LIMIT 10",
+            "SELECT to_address, SUM(value) as total_eth FROM read_parquet('/path/to/transactions.parquet') GROUP BY to_address ORDER BY total_eth DESC LIMIT 10"
+        ],
+        "blocks": [
+            "SELECT * FROM blocks LIMIT 10",
+            "SELECT block_number, gas_used, transaction_count FROM blocks ORDER BY gas_used DESC LIMIT 10",
+            "SELECT AVG(gas_used) as avg_gas, AVG(transaction_count) as avg_txs FROM blocks"
+        ],
+        "logs": [
+            "SELECT * FROM logs LIMIT 10",
+            "SELECT address, COUNT(*) as event_count FROM logs GROUP BY address ORDER BY event_count DESC LIMIT 10",
+            "SELECT topic0, COUNT(*) as event_count FROM logs GROUP BY topic0 ORDER BY event_count DESC LIMIT 10"
+        ],
+        "joins": [
+            "-- Join with simple table references",
+            "SELECT t.block_number, COUNT(*) as tx_count, b.gas_used FROM transactions t JOIN blocks b ON t.block_number = b.block_number GROUP BY t.block_number, b.gas_used ORDER BY tx_count DESC LIMIT 10",
+            
+            "-- Join with read_parquet (useful for complex joins)",
+            "SELECT l.block_number, l.address, COUNT(*) as log_count FROM read_parquet('/path/to/logs.parquet') l GROUP BY l.block_number, l.address ORDER BY log_count DESC LIMIT 10"
+        ],
+        "workflow_examples": [
+            "-- Step 1: Download data with query_dataset",
+            "# result = query_dataset(dataset='blocks', blocks='15000000:15000100', output_format='parquet')",
+            "-- Step 2: Get schema info",
+            "# schema = get_sql_table_schema(result['files'][0])",
+            "-- Step 3: Run SQL query (simple table reference)",
+            "# query_sql(query=\"SELECT * FROM blocks LIMIT 10\", files=result.get('files', []))",
+            "",
+            "-- Or use the combined function",
+            "# query_blockchain_sql(sql_query=\"SELECT * FROM blocks LIMIT 10\", dataset='blocks', blocks='15000000:15000100')"
+        ]
     }
 
 def parse_args(args=None):
