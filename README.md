@@ -37,10 +37,10 @@ uv tool install cryo-mcp
 
 1. Run `claude mcp add` for an interactive prompt.
 2. Enter `uvx` as the command to run.
-3. Enter `cryo-mcp -r <ETH_RPC_URL>` as the args
-4. Alternatively, provide `ETH_RPC_URL` as an environment variable instead.
+3. Enter `cryo-mcp --rpc-url <ETH_RPC_URL> [--data-dir <DATA_DIR>]` as the args
+4. Alternatively, provide `ETH_RPC_URL` and `CRYO_DATA_DIR` as environment variables instead.
 
-New instances of `claude` will now have access to cryo as configured to hit your RPC endpoint.
+New instances of `claude` will now have access to cryo as configured to hit your RPC endpoint and store data in the specified directory.
 
 ## Available Tools
 
@@ -113,10 +113,12 @@ client.get_latest_ethereum_block()
 When starting the Cryo MCP server, you can use these command-line options:
 
 - `--rpc-url URL`: Ethereum RPC URL (overrides ETH_RPC_URL environment variable)
+- `--data-dir PATH`: Directory to store downloaded data (overrides CRYO_DATA_DIR environment variable, defaults to ~/.cryo-mcp/data/)
 
 ## Environment Variables
 
 - `ETH_RPC_URL`: Default Ethereum RPC URL to use when not specified via command line
+- `CRYO_DATA_DIR`: Default directory to store downloaded data when not specified via command line
 
 ## Advanced Usage
 

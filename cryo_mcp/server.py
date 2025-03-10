@@ -18,6 +18,9 @@ from mcp.server.fastmcp import FastMCP
 # Get the default RPC URL from environment or use fallback
 DEFAULT_RPC_URL = "http://localhost:8545"
 
+# Default data directory for storing output
+DEFAULT_DATA_DIR = str(Path.home() / ".cryo-mcp" / "data")
+
 # Create an MCP server
 mcp = FastMCP("Cryo Data Server")
 
@@ -164,11 +167,29 @@ def query_dataset(
         cmd.append("--exclude-columns")
         cmd.extend(exclude_columns)
 
-    # Create a temporary directory for output
-    temp_dir = Path("/tmp/cryo_output")
-    temp_dir.mkdir(exist_ok=True)
+    # Get the base data directory
+    data_dir = Path(os.environ.get("CRYO_DATA_DIR", DEFAULT_DATA_DIR))
+    
+    # Choose output directory based on whether we're querying latest blocks
+    if use_latest or blocks_from_latest is not None:
+        output_dir = data_dir / "latest"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Clean up the latest directory before new query
+        print("Cleaning latest directory for current block query")
+        existing_files = list(output_dir.glob(f"*{dataset}*.*"))
+        for file in existing_files:
+            try:
+                file.unlink()
+                print(f"Removed existing file: {file}")
+            except Exception as e:
+                print(f"Warning: Could not remove file {file}: {e}")
+    else:
+        # For historical queries, use the main data directory
+        output_dir = data_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd.extend(["-o", str(temp_dir)])
+    cmd.extend(["-o", str(output_dir)])
 
     # Print the command for debugging
     print(f"Running query command: {' '.join(cmd)}")
@@ -184,7 +205,7 @@ def query_dataset(
         }
 
     # Find the output file(s)
-    output_files = list(temp_dir.glob(f"*{dataset}*.{output_format}"))
+    output_files = list(output_dir.glob(f"*{dataset}*.{output_format}"))
     print(f"Output files found: {output_files}")
 
     if not output_files:
@@ -278,8 +299,7 @@ def lookup_dataset(
     
     # Try to get a sample of the dataset (first 5 records)
     try:
-        temp_dir = Path("/tmp/cryo_samples")
-        temp_dir.mkdir(exist_ok=True)
+        data_dir = Path(os.environ.get("CRYO_DATA_DIR", DEFAULT_DATA_DIR))
         
         # Determine block range for sample (priority: latest > specified blocks > default)
         if use_latest_sample or sample_blocks_from_latest is not None:
@@ -298,25 +318,45 @@ def lookup_dataset(
                 block_range = f"{latest_block-4}:{latest_block+1}"
             
             info["sample_block_range"] = block_range
-        elif sample_start_block is not None:
-            if sample_end_block is not None:
-                # Note: cryo uses [start:end) range (inclusive start, exclusive end)
-                # Add 1 to end_block to include it in the range
-                block_range = f"{sample_start_block}:{sample_end_block+1}"
-            else:
-                # Use start block and get 5 blocks
-                block_range = f"{sample_start_block}:{sample_start_block+5}"
-        else:
-            # Default to a known good block range
-            block_range = "1000:1005"
             
+            # Use the latest directory for latest block samples
+            sample_dir = data_dir / "latest"
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Clean up the latest directory before new query
+            print("Cleaning latest directory for current sample")
+            existing_files = list(sample_dir.glob(f"*{name}*.*"))
+            for file in existing_files:
+                try:
+                    file.unlink()
+                    print(f"Removed existing sample file: {file}")
+                except Exception as e:
+                    print(f"Warning: Could not remove sample file {file}: {e}")
+        else:
+            # For historical blocks, get the start block and end block
+            if sample_start_block is not None:
+                if sample_end_block is not None:
+                    # Note: cryo uses [start:end) range (inclusive start, exclusive end)
+                    # Add 1 to end_block to include it in the range
+                    block_range = f"{sample_start_block}:{sample_end_block+1}"
+                else:
+                    # Use start block and get 5 blocks
+                    block_range = f"{sample_start_block}:{sample_start_block+5}"
+            else:
+                # Default to a known good block range
+                block_range = "1000:1005"
+            
+            # For historical samples, use the main data directory
+            sample_dir = data_dir
+            sample_dir.mkdir(parents=True, exist_ok=True)
+                
         # Use the block range for the sample
         sample_cmd = [
             "cryo", name, 
             "-b", block_range,
             "-r", rpc_url,
             "--json", 
-            "-o", str(temp_dir)
+            "-o", str(sample_dir)
         ]
         
         print(f"Running sample command: {' '.join(sample_cmd)}")
@@ -329,7 +369,7 @@ def lookup_dataset(
         
         if sample_result.returncode == 0:
             # Find the output file
-            output_files = list(temp_dir.glob(f"*{name}*.json"))
+            output_files = list(sample_dir.glob(f"*{name}*.json"))
             print(f"Output files found: {output_files}")
             
             if output_files:
@@ -458,15 +498,26 @@ def get_latest_ethereum_block() -> Dict[str, Any]:
     rpc_url = os.environ.get("ETH_RPC_URL", DEFAULT_RPC_URL)
     block_range = f"{latest_block}:{latest_block+1}"  # +1 to make it inclusive
     
-    temp_dir = Path("/tmp/cryo_latest")
-    temp_dir.mkdir(exist_ok=True)
+    data_dir = Path(os.environ.get("CRYO_DATA_DIR", DEFAULT_DATA_DIR))
+    latest_dir = data_dir / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Always clean up the latest directory for latest block
+    print("Cleaning latest directory for current block")
+    existing_files = list(latest_dir.glob("*blocks*.*"))
+    for file in existing_files:
+        try:
+            file.unlink()
+            print(f"Removed existing file: {file}")
+        except Exception as e:
+            print(f"Warning: Could not remove file {file}: {e}")
     
     cmd = [
         "cryo", "blocks", 
         "-b", block_range,
         "-r", rpc_url,
         "--json", 
-        "-o", str(temp_dir)
+        "-o", str(latest_dir)
     ]
     
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -479,7 +530,7 @@ def get_latest_ethereum_block() -> Dict[str, Any]:
         }
     
     # Find the output file
-    output_files = list(temp_dir.glob("*blocks*.json"))
+    output_files = list(latest_dir.glob("*blocks*.json"))
     
     if not output_files:
         return {
@@ -514,6 +565,11 @@ def parse_args(args=None):
         type=str, 
         help="Ethereum RPC URL to use for requests"
     )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        help="Directory to store downloaded data, defaults to ~/.cryo-mcp/data/"
+    )
     return parser.parse_args(args)
 
 def main():
@@ -532,6 +588,22 @@ def main():
         rpc_url = DEFAULT_RPC_URL
         os.environ["ETH_RPC_URL"] = rpc_url
         print(f"Using default RPC URL: {rpc_url}")
+    
+    # Set data directory with priority: command line > environment variable > default
+    if args.data_dir:
+        data_dir = args.data_dir
+        os.environ["CRYO_DATA_DIR"] = data_dir
+        print(f"Using data directory from command line: {data_dir}")
+    elif os.environ.get("CRYO_DATA_DIR"):
+        data_dir = os.environ["CRYO_DATA_DIR"]
+        print(f"Using data directory from environment: {data_dir}")
+    else:
+        data_dir = DEFAULT_DATA_DIR
+        os.environ["CRYO_DATA_DIR"] = data_dir
+        print(f"Using default data directory: {data_dir}")
+    
+    # Ensure data directory exists
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
     
     mcp.run()
     
