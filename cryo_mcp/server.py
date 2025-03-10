@@ -610,11 +610,22 @@ def parse_args(args=None):
         type=str,
         help="Directory to store downloaded data, defaults to ~/.cryo-mcp/data/"
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Show version information and exit"
+    )
     return parser.parse_args(args)
 
 def main():
     """Main entry point for the command-line script"""
     args = parse_args()
+    
+    # Check if version was requested
+    if args.version:
+        from cryo_mcp import __version__
+        print(f"cryo-mcp version {__version__}")
+        return 0
     
     # Set RPC URL with priority: command line > environment variable > default
     if args.rpc_url:
