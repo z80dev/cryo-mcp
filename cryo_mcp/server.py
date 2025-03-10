@@ -101,14 +101,28 @@ def query_dataset(
     2. Get file paths: files = result.get('files', [])
     3. Run SQL query: query_sql("SELECT * FROM read_parquet('/path/to/file.parquet')", files=files)
 
+    DATASET-SPECIFIC PARAMETERS:
+    For datasets that require specific address parameters (like 'balances', 'erc20_transfers', etc.),
+    ALWAYS use the 'contract' parameter to pass ANY Ethereum address. For example:
+    
+    - For 'balances' dataset: Use contract parameter for the address you want balances for
+      query_dataset('balances', blocks='1000:1010', contract='0x123...')
+    
+    - For 'logs' or 'erc20_transfers': Use contract parameter for contract address
+      query_dataset('logs', blocks='1000:1010', contract='0x123...')
+    
+    To check what parameters a dataset requires, always use lookup_dataset() first:
+    lookup_dataset('balances')  # Will show required parameters
+
     Args:
-        dataset: The name of the dataset to query (e.g., 'logs', 'transactions')
+        dataset: The name of the dataset to query (e.g., 'logs', 'transactions', 'balances')
         blocks: Block range specification as a string (e.g., '1000:1010')
         start_block: Start block number as integer (alternative to blocks)
         end_block: End block number as integer (alternative to blocks)
         use_latest: If True, query the latest block
         blocks_from_latest: Number of blocks before the latest to include (e.g., 10 = latest-10 to latest)
-        contract: Contract address to filter by
+        contract: Contract address to filter by - IMPORTANT: Use this parameter for ALL address-based filtering
+          regardless of the parameter name in the native cryo command (address, contract, etc.)
         output_format: Output format (json, csv, parquet) - use 'parquet' for SQL queries
         include_columns: Columns to include alongside the defaults
         exclude_columns: Columns to exclude from the defaults
@@ -159,8 +173,17 @@ def query_dataset(
         # Default to a reasonable block range if none specified
         cmd.extend(["-b", "1000:1010"])
 
+    # Handle dataset-specific address parameters
+    # For all address-based filters, we use the contract parameter
+    # but map it to the correct flag based on the dataset
     if contract:
-        cmd.extend(["--contract", contract])
+        # Check if this is a dataset that requires a different parameter name
+        if dataset == 'balances':
+            # For balances dataset, contract parameter maps to --address
+            cmd.extend(["--address", contract])
+        else:
+            # For other datasets like logs, transactions, etc. use --contract
+            cmd.extend(["--contract", contract])
 
     if output_format == "json":
         cmd.append("--json")
@@ -267,10 +290,21 @@ def get_dataset_info(name: str) -> Dict[str, Any]:
     if latest_block:
         latest_example = f"query_dataset('{name}', blocks_from_latest=10)  # Gets latest-10 to latest blocks"
     
+    # Add special examples for datasets requiring address parameters
+    address_example = ""
+    if "address" in result.stdout.lower() and "required parameters: address" in result.stdout.lower():
+        address_example = f"query_dataset('{name}', blocks='1000:1010', contract='0x123...')  # Use contract parameter for address"
+    
     return {
         "name": name,
         "description": result.stdout,
         "example_queries": [
+            f"query_dataset('{name}', blocks='1000:1010')",
+            f"query_dataset('{name}', start_block=1000, end_block=1009)",
+            f"query_dataset('{name}', use_latest=True)  # Gets just the latest block",
+            latest_example,
+            address_example
+        ] if address_example else [
             f"query_dataset('{name}', blocks='1000:1010')",
             f"query_dataset('{name}', start_block=1000, end_block=1009)",
             f"query_dataset('{name}', use_latest=True)  # Gets just the latest block",
@@ -279,7 +313,9 @@ def get_dataset_info(name: str) -> Dict[str, Any]:
         "notes": [
             "Block ranges are inclusive for start_block and end_block when using integer parameters.",
             "Use 'use_latest=True' to query only the latest block.",
-            "Use 'blocks_from_latest=N' to query the latest N blocks."
+            "Use 'blocks_from_latest=N' to query the latest N blocks.",
+            "IMPORTANT: For datasets requiring an 'address' parameter (like 'balances'), use the 'contract' parameter.",
+            "Always check the required parameters in the dataset description and use lookup_dataset() first."
         ]
     }
 
@@ -292,7 +328,21 @@ def lookup_dataset(
     sample_blocks_from_latest: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Look up a specific dataset and return detailed information about it
+    Look up a specific dataset and return detailed information about it. IMPORTANT: Always use this
+    function before querying a new dataset to understand its required parameters and schema.
+    
+    The returned information includes:
+    1. Required parameters for the dataset (IMPORTANT for datasets like 'balances' that need an address)
+    2. Schema details showing available columns and data types
+    3. Example queries for the dataset
+    
+    When the dataset requires specific parameters like 'address' (for 'balances'),
+    ALWAYS use the 'contract' parameter in query_dataset() to pass these values.
+    
+    Example:
+    For 'balances' dataset, lookup_dataset('balances') will show it requires an 'address' parameter.
+    You should then query it using:
+    query_dataset('balances', blocks='1000:1010', contract='0x1234...')
     
     Args:
         name: The name of the dataset to look up
@@ -705,6 +755,18 @@ def query_blockchain_sql(
     1. Simple table references: "SELECT * FROM blocks LIMIT 10"
     2. Explicit read_parquet: "SELECT * FROM read_parquet('/path/to/file.parquet') LIMIT 10"
     
+    DATASET-SPECIFIC PARAMETERS:
+    For datasets that require specific address parameters (like 'balances', 'erc20_transfers', etc.),
+    ALWAYS use the 'contract' parameter to pass ANY Ethereum address. For example:
+    
+    - For 'balances' dataset: Use contract parameter for the address you want balances for
+      query_blockchain_sql(
+          sql_query="SELECT * FROM balances",
+          dataset="balances",
+          blocks='1000:1010',
+          contract='0x123...'  # Address you want balances for
+      )
+    
     Examples:
     ```
     # Using simple table name
@@ -730,14 +792,15 @@ def query_blockchain_sql(
     
     Args:
         sql_query: SQL query to execute - using table names or read_parquet()
-        dataset: The specific dataset to query (e.g., 'transactions', 'logs')
+        dataset: The specific dataset to query (e.g., 'transactions', 'logs', 'balances')
                  If None, will be extracted from the SQL query
         blocks: Block range specification as a string (e.g., '1000:1010')
         start_block: Start block number (alternative to blocks)
         end_block: End block number (alternative to blocks)
         use_latest: If True, query the latest block
         blocks_from_latest: Number of blocks before the latest to include
-        contract: Contract address to filter by
+        contract: Contract address to filter by - IMPORTANT: Use this parameter for ALL address-based filtering
+          regardless of the parameter name in the native cryo command (address, contract, etc.)
         force_refresh: Force download of new data even if it exists
         include_schema: Include schema information in the result
         
@@ -846,6 +909,14 @@ def get_sql_examples() -> Dict[str, List[str]]:
             "SELECT block_number, gas_used, transaction_count FROM blocks ORDER BY gas_used DESC LIMIT 10",
             "SELECT AVG(gas_used) as avg_gas, AVG(transaction_count) as avg_txs FROM blocks"
         ],
+        "balances": [
+            "-- IMPORTANT: When querying the balances dataset, use the 'contract' parameter to specify the address",
+            "-- First download the data:",
+            "# result = query_dataset('balances', blocks='15M:15.01M', contract='0x1234...', output_format='parquet')",
+            "-- Then query the data:",
+            "SELECT block_number, address, balance_f64 FROM balances ORDER BY block_number",
+            "SELECT block_number, balance_f64, balance_f64/1e18 as balance_eth FROM balances ORDER BY block_number"
+        ],
         "logs": [
             "SELECT * FROM logs LIMIT 10",
             "SELECT address, COUNT(*) as event_count FROM logs GROUP BY address ORDER BY event_count DESC LIMIT 10",
@@ -868,6 +939,19 @@ def get_sql_examples() -> Dict[str, List[str]]:
             "",
             "-- Or use the combined function",
             "# query_blockchain_sql(sql_query=\"SELECT * FROM blocks LIMIT 10\", dataset='blocks', blocks='15000000:15000100')"
+        ],
+        "using_dataset_parameters": [
+            "-- IMPORTANT: How to check required parameters for datasets",
+            "-- Step 1: Look up the dataset to see required parameters",
+            "# dataset_info = lookup_dataset('balances')",
+            "# This will show: 'required parameters: address'",
+            "",
+            "-- Step 2: Use the contract parameter for ANY address parameter",
+            "# For balances dataset, query_dataset('balances', blocks='1M:1.1M', contract='0x1234...')",
+            "# For erc20_transfers, query_dataset('erc20_transfers', blocks='1M:1.1M', contract='0x1234...')",
+            "",
+            "-- Step 3: Always check the dataset description and schema before querying new datasets",
+            "# This helps ensure you're passing the correct parameters"
         ]
     }
 
