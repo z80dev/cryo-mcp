@@ -4,6 +4,10 @@ A Model Completion Protocol (MCP) server for the [Cryo](https://github.com/parad
 
 Cryo MCP allows you to access Cryo's powerful blockchain data extraction capabilities via an API server that implements the MCP protocol, making it easy to query blockchain data from any MCP-compatible client.
 
+<a href="https://glama.ai/mcp/servers/90ftd26na5">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/90ftd26na5/badge" alt="Cryo Server MCP server" />
+</a>
+
 ## For LLM Users: SQL Query Workflow Guide
 
 When using this MCP server to run SQL queries on blockchain data, follow this workflow:
